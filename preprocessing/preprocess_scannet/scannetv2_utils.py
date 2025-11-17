@@ -8,7 +8,7 @@ import cv2
 
 from scipy.spatial.distance import cdist
 
-from scannet200_utils_from_vlm3r import SCANNET200_VALID_CATEGORY_NAME, SCANNET200_CLASS_NAMES, \
+from .scannet200_utils_from_vlm3r import SCANNET200_VALID_CATEGORY_NAME, SCANNET200_CLASS_NAMES, \
     SCANNET200_VALID_CATEGORY_IDX, SCANNET200_CLASS_REMAPPER_LIST, SCANNET200_CLASS_REMAPPER
 
 

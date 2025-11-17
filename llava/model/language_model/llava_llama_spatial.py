@@ -17,7 +17,7 @@ from ..llava_arch2 import LlavaSpatialMetaModel, LlavaSpatialMetaForCausalLM
 
 class LlavaSpatialConfig(LlamaConfig):
     model_type = "llava_llama_spatial"
-
+    
 class LlavaLlamaSpatialModel(LlavaSpatialMetaModel, LlamaModel):
     config_class = LlavaSpatialConfig
 

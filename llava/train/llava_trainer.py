@@ -13,7 +13,7 @@ from transformers.trainer import (
     logger,
 )
 from typing import List, Optional
-
+import shutil
 
 def maybe_zero_3(param, ignore_status=False, name=None):
     from deepspeed import zero
@@ -227,24 +227,78 @@ class LLaVATrainer(Trainer):
 
         return self.optimizer
 
+    # def _save_checkpoint(self, model, trial, metrics=None):
+    #     if getattr(self.args, 'tune_mm_mlp_adapter', False):
+    #         from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+    #         checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+
+    #         run_dir = self._get_output_dir(trial=trial)
+    #         output_dir = os.path.join(run_dir, checkpoint_folder)
+
+    #         # Only save Adapter
+    #         keys_to_match = ['mm_projector', 'vision_resampler']
+    #         if getattr(self.args, "use_im_start_end", False):
+    #             keys_to_match.extend(['embed_tokens', 'embed_in'])
+
+    #         weight_to_save = get_mm_adapter_state_maybe_zero_3(self.model.named_parameters(), keys_to_match)
+
+    #         if self.args.local_rank == 0 or self.args.local_rank == -1:
+    #             self.model.config.save_pretrained(output_dir)
+    #             torch.save(weight_to_save, os.path.join(output_dir, f'mm_projector.bin'))
+    #     else:
+    #         super(LLaVATrainer, self)._save_checkpoint(model, trial, metrics)
+
     def _save_checkpoint(self, model, trial, metrics=None):
         if getattr(self.args, 'tune_mm_mlp_adapter', False):
             from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
             checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
-
             run_dir = self._get_output_dir(trial=trial)
             output_dir = os.path.join(run_dir, checkpoint_folder)
 
-            # Only save Adapter
+            # save adapter-only (your code)
             keys_to_match = ['mm_projector', 'vision_resampler']
             if getattr(self.args, "use_im_start_end", False):
                 keys_to_match.extend(['embed_tokens', 'embed_in'])
-
             weight_to_save = get_mm_adapter_state_maybe_zero_3(self.model.named_parameters(), keys_to_match)
 
-            if self.args.local_rank == 0 or self.args.local_rank == -1:
+            if self.args.local_rank in (0, -1):
                 self.model.config.save_pretrained(output_dir)
-                torch.save(weight_to_save, os.path.join(output_dir, f'mm_projector.bin'))
+                torch.save(weight_to_save, os.path.join(output_dir, 'mm_projector.bin'))
+
+            # >>> NEW: enforce save_total_limit rotation <<<
+            if self.args.save_total_limit is not None and self.args.save_total_limit > 0:
+                # list checkpoints
+                ckpts = [
+                    os.path.join(run_dir, d)
+                    for d in os.listdir(run_dir)
+                    if d.startswith(PREFIX_CHECKPOINT_DIR + "-")
+                    and os.path.isdir(os.path.join(run_dir, d))
+                ]
+                # keep "best" if present
+                best = getattr(self.state, "best_model_checkpoint", None)
+                # sort by step (older first)
+                def _step_from(p: str) -> int:
+                    base = os.path.basename(p)
+                    try:
+                        return int(base.split("checkpoint-")[-1])
+                    except ValueError:
+                        return -1
+                ckpts_sorted = sorted(ckpts, key=_step_from)
+                # decide victims
+                to_delete = []
+                if len(ckpts_sorted) > self.args.save_total_limit:
+                    num_to_remove = len(ckpts_sorted) - self.args.save_total_limit
+                    for p in ckpts_sorted:
+                        if p == best:
+                            continue
+                        to_delete.append(p)
+                        if len(to_delete) == num_to_remove:
+                            break
+                # delete
+                if self.args.local_rank in (0, -1):
+                    for p in to_delete:
+                        shutil.rmtree(p, ignore_errors=True)
+            # <<< END NEW >>>
         else:
             super(LLaVATrainer, self)._save_checkpoint(model, trial, metrics)
 

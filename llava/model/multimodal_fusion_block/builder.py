@@ -35,7 +35,15 @@ class CrossAttentionFusion(nn.Module):
             fused_features: [B, N, D_clip]
         """
         # pre-norm
+
         clip_features_norm = self.clip_norm(clip_features)  # [B, N, D_clip]
+        #print(clip_features_norm.shape)
+
+        device = next(self.parameters()).device
+        # Move inputs to that device
+        clip_features = clip_features.to(device)
+        spatial_encoder_features = spatial_encoder_features.to(device)
+        
         spatial_encoder_features_norm = self.spatial_encoder_norm(spatial_encoder_features)  # [B, N, D_spatial_encoder]
         
         # projection to D_attn dimension
@@ -43,6 +51,10 @@ class CrossAttentionFusion(nn.Module):
         spatial_encoder_key_proj = self.spatial_encoder_key_proj(spatial_encoder_features_norm)  # [B, N, D_attn]
         spatial_encoder_value_proj = self.spatial_encoder_value_proj(spatial_encoder_features_norm)  # [B, N, D_attn]
         
+        #print(clip_query_proj.shape)
+        #print(spatial_encoder_key_proj.shape)
+        #   print(spatial_encoder_value_proj.shape)
+
         # cross attention
         fused_features, attn_weights = self.cross_attention(
             query=clip_query_proj,
@@ -65,7 +77,6 @@ class CrossAttentionFusion(nn.Module):
 def build_multimodal_fusion_block(config, delay_load=False, **kwargs):
     fusion_block_type = getattr(config, "fusion_block", "cross_attention")
     d_clip = config.mm_hidden_size
-    #print(d_clip)
     d_attn = d_clip
     d_spatial_encoder = getattr(config, "spatial_feature_dim", 768)
   
@@ -74,8 +85,8 @@ def build_multimodal_fusion_block(config, delay_load=False, **kwargs):
             d_clip=d_clip,
             d_spatial_encoder=d_spatial_encoder,
             d_attn=d_attn,
-            num_heads=18
-            #num_heads=16
+            #num_heads=18
+            num_heads=16
         )
 
     raise ValueError(f"Unknown fusion block type: {fusion_block_type}")

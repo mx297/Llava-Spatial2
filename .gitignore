@@ -7,8 +7,8 @@ dist
 # Log
 *.log
 *.log.*
-*.json
-*.jsonl
+#*.json
+#*.jsonl
 *.png
 *.webp
 *.jpeg
@@ -17,6 +17,7 @@ dist
 !**/alpaca-data-conversation.json
 sampled_scenes
 scenes
+data
 
 # Editor
 .idea

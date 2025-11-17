@@ -12,7 +12,7 @@ from typing import List, Dict, Any, Tuple # Added Tuple
 from pathlib import Path # Added for easier path handling
 
 # Import base classes
-from base_processor import BaseProcessorConfig, AbstractSceneProcessor
+from .base_processor import BaseProcessorConfig, AbstractSceneProcessor
 
 
 # Suppress specific PIL warnings if necessary, e.g., DecompressionBombWarning

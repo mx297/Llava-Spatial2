@@ -30,13 +30,12 @@ class LlavaSpatialMetaModel:
 
     def __init__(self, config):
         super(LlavaSpatialMetaModel, self).__init__(config)
-        print(config)
+        
         if hasattr(config, "vision_tower"):
             delay_load = getattr(config, "delay_load", False)
             self.vision_tower = build_vision_tower(config, delay_load=delay_load)
             
             # create spatial tower and fusion block
-            print(config)
             if hasattr(config, "spatial_tower"):
                 self.spatial_tower = build_spatial_tower(config, delay_load=True)
             if hasattr(config, "fusion_block"):
@@ -98,6 +97,8 @@ class LlavaSpatialMetaModel:
 
     def initialize_fusion_block(self, model_args, fsdp=None):
         # initialize the fusion block
+        #print(self.config)
+        #print(getattr(self, "fusion_block", None))
         if getattr(self, "fusion_block", None) is None:
             self.fusion_block = build_multimodal_fusion_block(self.config)
         else:
@@ -165,7 +166,6 @@ class LlavaSpatialMetaModel:
         if ip is not None:
             self.config.clip_image_mean = getattr(ip, "image_mean", None)
             self.config.clip_image_std  = getattr(ip, "image_std",  None)
-            print(self.config.clip_image_std)
         else:
             self.config.clip_image_mean = None
             self.config.clip_image_std  = None
@@ -254,7 +254,7 @@ class LlavaSpatialMetaForCausalLM(ABC):
                 raise ValueError(f"Unexpected spatial_tower_select_feature: {p}")
         return torch.cat(final_feats, dim=1).to(self.get_model().dtype)
 
-    def encode_images(self, images):
+    def encode_images(self, images,spatial_features=None,point_maps=None):
         """
         Single-image path. `images` can be (B, C, H, W), or as your data loader
         sometimes passes (list / 5D); we DO NOT normalize here—leave upstream as-is.
@@ -262,8 +262,9 @@ class LlavaSpatialMetaForCausalLM(ABC):
         in the simple branch of prepare_inputs_labels_for_multimodal, and the
         concatenated 4D tensor when coming from the list/5D branch.
         """
+        #print(images.shape)
         image_features = self.get_model().get_vision_tower()(images)  # (B, Nv, Dv)
-
+        #print(image_features.shape)
         spatial_tower = self.get_spatial_tower()
         fusion_block = self.get_fusion_block()
 
@@ -274,30 +275,34 @@ class LlavaSpatialMetaForCausalLM(ABC):
             camera_tokens, patch_tokens = spatial_tower(images)
             if fusion_type == "cross_attention":
                 spatial_feats = self._select_spatial_features(camera_tokens, patch_tokens)  # (B, Ns, Ds)
-                image_features, _ = fusion_block(image_features, spatial_feats)
-            else:
-                # If you later add MLP/Transformer fusion types, branch here.
-                pass
-
+                
+                device = image_features.device
+                if spatial_feats.device != device:
+                    spatial_feats = spatial_feats.to(device)
+            
+                image_features, attn_weights = fusion_block(image_features, spatial_feats)
         # Project to language dimension
         image_features = self.get_model().mm_projector(image_features)  # (B, Nv, D)
         return image_features
 
     def prepare_inputs_labels_for_multimodal(
         self, input_ids, position_ids, attention_mask, past_key_values, labels,
-        images, image_sizes=None
+        images, spatial_features=None, point_maps=None, modalities=["image"],image_sizes=None
     ):
         vision_tower = self.get_vision_tower()
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
             return input_ids, position_ids, attention_mask, past_key_values, None, labels
+
+        if isinstance(modalities, str):
+            modalities = [modalities]
 
         # --- Leave original behavior if `images` is a list or 5D ---
         if type(images) is list or images.ndim == 5:
             if type(images) is list:
                 images = [x.unsqueeze(0) if x.ndim == 3 else x for x in images]
             concat_images = torch.cat([image for image in images], dim=0)  # (sumB, C, H, W)
-            image_features = self.encode_images(concat_images)             # (sumB, Nv, D)
-
+            image_features = self.encode_images(concat_images,spatial_features,point_maps)             # (sumB, Nv, D)
+            #print("if image_features",image_features.shape)
             split_sizes = [image.shape[0] for image in images]
             image_features = torch.split(image_features, split_sizes, dim=0)
 
@@ -356,9 +361,11 @@ class LlavaSpatialMetaForCausalLM(ABC):
 
         else:
             # Simple single-image batched tensor (B, C, H, W)
-            image_features = self.encode_images(images)  # (B, Nv, D)
-            image_features = [feat.flatten(0, 1) for feat in torch.unbind(image_features, dim=0)]
-
+            image_features = self.encode_images(images,spatial_features,point_maps)  # (B, Nv, D)
+            #print("else image_features",image_features.shape)
+            #image_features = [feat.flatten(0, 1) for feat in torch.unbind(image_features, dim=0)]
+            image_features = [feat.contiguous() for feat in torch.unbind(image_features, dim=0)]
+            #print("else image_features",image_features.shape)
         # TODO: image start / end is not implemented here to support pretraining.
         if getattr(self.config, 'tune_mm_mlp_adapter', False) and getattr(self.config, 'mm_use_im_start_end', False):
             raise NotImplementedError
@@ -433,9 +440,11 @@ class LlavaSpatialMetaForCausalLM(ABC):
         # Truncate sequences to max length as image embeddings can make the sequence longer
         tokenizer_model_max_length = getattr(self.config, 'tokenizer_model_max_length', None)
         if tokenizer_model_max_length is not None:
-            new_input_embeds = [x[:tokenizer_model_max_length] for x in new_input_embeds]
-            new_labels = [x[:tokenizer_model_max_length] for x in new_labels]
-
+            #new_input_embeds = [x[:tokenizer_model_max_length] for x in new_input_embeds]
+            #new_labels = [x[:tokenizer_model_max_length] for x in new_labels]
+            new_input_embeds = [x[:tokenizer_model_max_length] for x, modality in zip(new_input_embeds, modalities)]
+            new_labels = [x[:tokenizer_model_max_length] for x, modality in zip(new_labels, modalities)]
+        
         # Combine them
         max_len = max(x.shape[0] for x in new_input_embeds)
         batch_size = len(new_input_embeds)

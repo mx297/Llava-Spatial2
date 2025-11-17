@@ -1,7 +1,8 @@
 import os
 import sys
 from typing import Optional, Tuple
-
+#import numpy as np
+#import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from llava.utils import rank0_print
@@ -60,27 +61,32 @@ class VGGTSpatialTower(nn.Module):
         self.clip_image_mean = getattr(spatial_tower_cfg, "clip_image_mean", None)
         self.clip_image_std  = getattr(spatial_tower_cfg, "clip_image_std",  None)
         ###
+        
+        self.register_buffer("_device_marker", torch.empty(0), persistent=False)
 
         # Default weights at: <repo_root>/vggt/VGGT-1B
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        repo_root = os.path.abspath(os.path.join(script_dir, '..', '..', '..'))
-        self.weights_path = os.path.join(repo_root, 'vggt', 'VGGT-1B')
+        #script_dir = os.path.dirname(os.path.abspath(__file__))
+        #repo_root = os.path.abspath(os.path.join(script_dir, '..', '..', '..'))
+        #self.weights_path = os.path.join(repo_root, 'vggt', 'VGGT-1B')
 
         self.vggt = None
         if not delay_load:
             self.load_model()
 
     def load_model(self, device_map: Optional[dict] = None):
-        print(self.is_loaded)
         if self.is_loaded:
             rank0_print(f"{self.spatial_tower_name} already loaded; skipping.")
             return
-        rank0_print(f"Loading VGGT weights from: {self.weights_path}")
+        rank0_print(f"Loading VGGT weights from: facebook/VGGT-1B")
         print("--------------------------------------------------------------")
-        self.vggt = VGGT.from_pretrained(self.weights_path)
+        self.vggt = VGGT.from_pretrained("facebook/VGGT-1B")
         self.vggt.eval()
         for p in self.vggt.parameters():
             p.requires_grad = False
+        
+        vggt_device = self._device_marker.device
+        self.vggt.to(vggt_device)
+        
         self.is_loaded = True
 
     @torch.no_grad()
@@ -98,26 +104,46 @@ class VGGTSpatialTower(nn.Module):
         tgt_device = self.device if self.vggt is not None else image.device
         tgt_dtype = self.dtype if self.vggt is not None else image.dtype
         image = image.to(device=tgt_device, dtype=tgt_dtype)
+        
+        #print(tgt_device)
+        #print(self.device)
+
+        tgt_device = self._device_marker.device
+        tgt_dtype  = self.dtype if self.vggt is not None else image.dtype
+        image = image.to(device=tgt_device, dtype=tgt_dtype, non_blocking=True)
+
+        # Debug (optional)
+        #rank0_print(f"VGGTSpatialTower running on: {tgt_device}")
 
         views = _prep_images(
                     image,
                     clip_mean=self.clip_image_mean,
                     clip_std=self.clip_image_std
                 )  # (B,1,C,378,378)
-
+        #print("views_shape",views.shape)
         with torch.cuda.amp.autocast(enabled=views.is_cuda):
             aggregated_tokens_list, ps_idx = self.vggt.aggregator(views)
-
+        
+        #depth_map, _ = self.vggt.depth_head(aggregated_tokens_list, views, ps_idx)
+        #depth_map = depth_map.cpu().detach().numpy()
+        #print(depth_map.shape)
+        #depth_map = np.squeeze(depth_map[0][0],axis=-1)
+        #print(depth_map.shape)
+        #depth_map = (depth_map*255).astype('uint8')
+        #plt.imsave("depth1_viridis.png", depth_map, cmap="viridis", vmin=0.0, vmax=depth_map.max())
         # VGGT returns list over layers; take last. Common shape: (F, B, N_all, D) with F=1 here.
         tokens = aggregated_tokens_list[-1].to(image.dtype)
+        #print("token_shape",tokens.shape)
         if tokens.dim() == 4:
             # (F, B, N, D) -> (B, N, D); assume F=1
-            tokens = tokens[0]
+            tokens = tokens.squeeze(dim=1)
         elif tokens.dim() != 3:
             raise RuntimeError(f"Unexpected token shape from VGGT: {tokens.shape}")
 
         camera_tokens = tokens[:, 0:1, :]     # (B, 1, D)
         patch_tokens  = tokens[:, ps_idx:, :] # (B, Np, D)
+        #print("camera_shape",camera_tokens.shape)
+        #print("patch_shape",patch_tokens.shape)
         return camera_tokens, patch_tokens
 
     @property
@@ -129,7 +155,9 @@ class VGGTSpatialTower(nn.Module):
 
     @property
     def device(self):
-        if self.vggt is None:
-            return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        for p in self.vggt.parameters():
-            return p.device
+        #if self.vggt is None:
+        #    return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        #for p in self.vggt.parameters():
+        #       return p.device
+        
+        return self._device_marker.device

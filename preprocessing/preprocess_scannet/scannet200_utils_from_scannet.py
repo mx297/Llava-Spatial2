@@ -3,7 +3,7 @@ import numpy as np
 from plyfile import PlyData, PlyElement
 import pandas as pd
 
-from scannet200_constants import *
+from .scannet200_constants import *
 
 def read_plymesh(filepath):
     """Read ply file and return it as numpy array. Returns None if emtpy."""

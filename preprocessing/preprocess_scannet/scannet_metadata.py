@@ -2,17 +2,17 @@ import argparse
 import os
 import pandas as pd
 import numpy as np
-from common_utils import calculate_room_area, calculate_room_center
-from scannetv2_utils import SCANNETV2_OBJECT_CATEGORY, get_objects_number_and_bbox, SCANNETV2_VALID_CATEGORY_IDX
+from .common_utils import calculate_room_area, calculate_room_center
+from .scannetv2_utils import SCANNETV2_OBJECT_CATEGORY, get_objects_number_and_bbox, SCANNETV2_VALID_CATEGORY_IDX
 # Import specific ScanNet200 constants
-from scannet200_utils_from_vlm3r import SCANNET200_CLASS_REMAPPER_LIST, SCANNET200_CLASS_REMAPPER, remap_categories, SCANNET200_CLASS_NAMES, SCANNET200_VALID_CATEGORY_IDX
+from .scannet200_utils_from_vlm3r import SCANNET200_CLASS_REMAPPER_LIST, SCANNET200_CLASS_REMAPPER, remap_categories, SCANNET200_CLASS_NAMES, SCANNET200_VALID_CATEGORY_IDX
 from plyfile import PlyData
 import logging
 from dataclasses import dataclass
 from typing import List, Dict, Any
 
 # Import base classes
-from base_processor import BaseProcessorConfig, AbstractSceneProcessor
+from .base_processor import BaseProcessorConfig, AbstractSceneProcessor
 
 logger = logging.getLogger(__name__)
 # logging.basicConfig setup is handled in base_processor if run standalone, or by runner script
