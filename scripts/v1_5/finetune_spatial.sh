@@ -16,9 +16,9 @@ deepspeed llava/train/train_mem_spatial.py \
     --deepspeed ./scripts/zero2.json \
     --model_name_or_path ${MODEL} \
     --version v1 \
-    --data_path ./formatted_questions_image.json \
+    --data_path ./data/formatted_questions_image.json \
     --image_folder /l/users/$USER \
-    --eval_data_path ./sampled_val.json \
+    --eval_data_path ./data/sampled_val.json \
     --val_image_folder /l/users/$USER \
     --vision_tower ${VISION_MODEL_VERSION} \
     --lora_enable True \
