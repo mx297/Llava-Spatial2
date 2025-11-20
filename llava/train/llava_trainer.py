@@ -15,6 +15,39 @@ from transformers.trainer import (
 from typing import List, Optional
 import shutil
 
+
+def get_peft_state_maybe_zero_3(named_params, bias):
+    if bias == "none":
+        to_return = {k: t for k, t in named_params if "lora_" in k}
+    elif bias == "all":
+        to_return = {k: t for k, t in named_params if "lora_" in k or "bias" in k}
+    elif bias == "lora_only":
+        to_return = {}
+        maybe_lora_bias = {}
+        lora_bias_names = set()
+        for k, t in named_params:
+            if "lora_" in k:
+                to_return[k] = t
+                bias_name = k.split("lora_")[0] + "bias"
+                lora_bias_names.add(bias_name)
+            elif "bias" in k:
+                maybe_lora_bias[k] = t
+        for k, t in maybe_lora_bias:
+            if bias_name in lora_bias_names:
+                to_return[bias_name] = t
+    else:
+        raise NotImplementedError
+    to_return = {k: maybe_zero_3(v, ignore_status=True) for k, v in to_return.items()}
+    return to_return
+
+def get_peft_state_non_lora_maybe_zero_3(named_params, require_grad_only=True):
+    to_return = {k: t for k, t in named_params if "lora_" not in k}
+    if require_grad_only:
+        to_return = {k: t for k, t in to_return.items() if t.requires_grad}
+    to_return = {k: maybe_zero_3(v, ignore_status=True).cpu() for k, v in to_return.items()}
+    return to_return
+
+
 def maybe_zero_3(param, ignore_status=False, name=None):
     from deepspeed import zero
     from deepspeed.runtime.zero.partition_parameters import ZeroParamStatus
@@ -248,60 +281,108 @@ class LLaVATrainer(Trainer):
     #     else:
     #         super(LLaVATrainer, self)._save_checkpoint(model, trial, metrics)
 
+    # def _save_checkpoint(self, model, trial, metrics=None):
+    #     if getattr(self.args, 'tune_mm_mlp_adapter', False):
+    #         from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+    #         checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+    #         run_dir = self._get_output_dir(trial=trial)
+    #         output_dir = os.path.join(run_dir, checkpoint_folder)
+
+    #         # save adapter-only (your code)
+    #         keys_to_match = ['mm_projector', 'vision_resampler']
+    #         if getattr(self.args, "use_im_start_end", False):
+    #             keys_to_match.extend(['embed_tokens', 'embed_in'])
+    #         weight_to_save = get_mm_adapter_state_maybe_zero_3(self.model.named_parameters(), keys_to_match)
+
+    #         if self.args.local_rank in (0, -1):
+    #             self.model.config.save_pretrained(output_dir)
+    #             torch.save(weight_to_save, os.path.join(output_dir, 'mm_projector.bin'))
+
+    #         # >>> NEW: enforce save_total_limit rotation <<<
+    #         if self.args.save_total_limit is not None and self.args.save_total_limit > 0:
+    #             # list checkpoints
+    #             ckpts = [
+    #                 os.path.join(run_dir, d)
+    #                 for d in os.listdir(run_dir)
+    #                 if d.startswith(PREFIX_CHECKPOINT_DIR + "-")
+    #                 and os.path.isdir(os.path.join(run_dir, d))
+    #             ]
+    #             # keep "best" if present
+    #             best = getattr(self.state, "best_model_checkpoint", None)
+    #             # sort by step (older first)
+    #             def _step_from(p: str) -> int:
+    #                 base = os.path.basename(p)
+    #                 try:
+    #                     return int(base.split("checkpoint-")[-1])
+    #                 except ValueError:
+    #                     return -1
+    #             ckpts_sorted = sorted(ckpts, key=_step_from)
+    #             # decide victims
+    #             to_delete = []
+    #             if len(ckpts_sorted) > self.args.save_total_limit:
+    #                 num_to_remove = len(ckpts_sorted) - self.args.save_total_limit
+    #                 for p in ckpts_sorted:
+    #                     if p == best:
+    #                         continue
+    #                     to_delete.append(p)
+    #                     if len(to_delete) == num_to_remove:
+    #                         break
+    #             # delete
+    #             if self.args.local_rank in (0, -1):
+    #                 for p in to_delete:
+    #                     shutil.rmtree(p, ignore_errors=True)
+    #         # <<< END NEW >>>
+    #     else:
+    #         super(LLaVATrainer, self)._save_checkpoint(model, trial, metrics)
+
     def _save_checkpoint(self, model, trial, metrics=None):
-        if getattr(self.args, 'tune_mm_mlp_adapter', False):
+        if self.args.lora_enable:
             from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+            
+            # 获取checkpoint路径
             checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
             run_dir = self._get_output_dir(trial=trial)
             output_dir = os.path.join(run_dir, checkpoint_folder)
+            # 分离并保存LoRA参数
+            base_model = model.module if hasattr(model, "module") else model
+            state_dict = get_peft_state_maybe_zero_3(base_model.named_parameters(), self.args.lora_bias)
+            non_lora_state_dict = get_peft_state_non_lora_maybe_zero_3(base_model.named_parameters())
+            
+            if self.args.local_rank == 0 or self.args.local_rank == -1:
+                os.makedirs(output_dir, exist_ok=True)
+                if hasattr(base_model, "config"):
+                    base_model.config.save_pretrained(output_dir)
+                if hasattr(base_model, "generation_config"):
+                    base_model.generation_config.save_pretrained(output_dir)
+                base_model.save_pretrained(output_dir, state_dict=state_dict)
+                torch.save(non_lora_state_dict, os.path.join(output_dir, "non_lora_trainables.bin"))
+            print("saved")
+        elif getattr(self.args, "tune_mm_mlp_adapter", False) or (
+            getattr(self.args, "tune_fusion_block", False)) or (
+            hasattr(self.args, "mm_tunable_parts") and (len(self.args.mm_tunable_parts.split(",")) == 1 and ("mm_mlp_adapter" in self.args.mm_tunable_parts or "mm_vision_resampler" in self.args.mm_tunable_parts))
+        ):
+            from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 
-            # save adapter-only (your code)
-            keys_to_match = ['mm_projector', 'vision_resampler']
+            checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+
+            run_dir = self._get_output_dir(trial=trial)
+            output_dir = os.path.join(run_dir, checkpoint_folder)
+
+            # Only save Adapter
+            keys_to_match = ["mm_projector", "vision_resampler", "fusion_block"]
             if getattr(self.args, "use_im_start_end", False):
-                keys_to_match.extend(['embed_tokens', 'embed_in'])
+                keys_to_match.extend(["embed_tokens", "embed_in"])
+
             weight_to_save = get_mm_adapter_state_maybe_zero_3(self.model.named_parameters(), keys_to_match)
 
-            if self.args.local_rank in (0, -1):
+            if self.args.local_rank == 0 or self.args.local_rank == -1:
                 self.model.config.save_pretrained(output_dir)
-                torch.save(weight_to_save, os.path.join(output_dir, 'mm_projector.bin'))
+                torch.save(weight_to_save, os.path.join(output_dir, f"mm_projector.bin"))
 
-            # >>> NEW: enforce save_total_limit rotation <<<
-            if self.args.save_total_limit is not None and self.args.save_total_limit > 0:
-                # list checkpoints
-                ckpts = [
-                    os.path.join(run_dir, d)
-                    for d in os.listdir(run_dir)
-                    if d.startswith(PREFIX_CHECKPOINT_DIR + "-")
-                    and os.path.isdir(os.path.join(run_dir, d))
-                ]
-                # keep "best" if present
-                best = getattr(self.state, "best_model_checkpoint", None)
-                # sort by step (older first)
-                def _step_from(p: str) -> int:
-                    base = os.path.basename(p)
-                    try:
-                        return int(base.split("checkpoint-")[-1])
-                    except ValueError:
-                        return -1
-                ckpts_sorted = sorted(ckpts, key=_step_from)
-                # decide victims
-                to_delete = []
-                if len(ckpts_sorted) > self.args.save_total_limit:
-                    num_to_remove = len(ckpts_sorted) - self.args.save_total_limit
-                    for p in ckpts_sorted:
-                        if p == best:
-                            continue
-                        to_delete.append(p)
-                        if len(to_delete) == num_to_remove:
-                            break
-                # delete
-                if self.args.local_rank in (0, -1):
-                    for p in to_delete:
-                        shutil.rmtree(p, ignore_errors=True)
-            # <<< END NEW >>>
-        else:
-            super(LLaVATrainer, self)._save_checkpoint(model, trial, metrics)
+        # 保存其他训练状态（优化器状态等）
+        super(LLaVATrainer, self)._save_checkpoint(model, trial, metrics)
 
+        
     def _save(self, output_dir: Optional[str] = None, state_dict=None):
         if getattr(self.args, 'tune_mm_mlp_adapter', False):
             pass

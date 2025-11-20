@@ -85,8 +85,8 @@ def build_multimodal_fusion_block(config, delay_load=False, **kwargs):
             d_clip=d_clip,
             d_spatial_encoder=d_spatial_encoder,
             d_attn=d_attn,
-            #num_heads=18
-            num_heads=16
+            num_heads=18
+            #num_heads=16
         )
 
     raise ValueError(f"Unknown fusion block type: {fusion_block_type}")

@@ -8,7 +8,8 @@ import torch.nn as nn
 from llava.utils import rank0_print
 from depth_anything_3.api import DepthAnything3
 import torchvision.transforms as T
-
+#from depth_anything_3.utils.io.output_processor import OutputProcessor
+#from depth_anything_3.utils.visualize import visualize_depth
 
 NORMALIZE = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
@@ -39,10 +40,11 @@ def _prep_images(img: torch.Tensor,
         # Fallback: assume legacy [-1,1] inputs
         img = img * 0.5 + 0.5
 
+    #print(img.min(),img.max())
     # (Optional) resize here if needed; kept disabled because 336 divisible by 14 as noted
     nh,nw = int((H//14)*14) , int((W//14)*14)
     img = nn.functional.interpolate(img, size=(nh, nw), mode='bilinear', align_corners=False)
-
+    #print(img.shape)
     img = NORMALIZE(img)
     return img.unsqueeze(1)  # (B,1,C,H,W) expected by VGGT aggregator
 
@@ -72,6 +74,7 @@ class DV3SpatialTower(nn.Module):
         self.dv3 = None
         self.backbone = None
         self.backbone_metric = None
+        #self.output_processor = OutputProcessor()
         if not delay_load:
             self.load_model()
 
@@ -94,6 +97,7 @@ class DV3SpatialTower(nn.Module):
         dv3_device = self._device_marker.device
         self.backbone.to(dv3_device)
         self.backbone_metric.to(dv3_device)
+        #self.dv3.to(dv3_device)
         self.is_loaded = True
 
     @torch.no_grad()
@@ -125,9 +129,13 @@ class DV3SpatialTower(nn.Module):
         with torch.cuda.amp.autocast(enabled=views.is_cuda):
             feats_metric,_ = self.backbone_metric(views)
             feats,_ = self.backbone(views)
-        
+            #o = self.dv3(views,export_feat_layers=[])
 
-
+        #output = self.output_processor(o)
+        #print(output.depth.shape)
+        #depth_vis = visualize_depth(output.depth[0][0], cmap="Spectral")
+        #print(depth_vis.shape)
+        #plt.imsave("depth1_viridis.png", depth_vis,cmap="Spectral",vmin=0,vmax=255)
         #depth_map, _ = self.vggt.depth_head(aggregated_tokens_list, views, ps_idx)
         #depth_map = depth_map.cpu().detach().numpy()
         #print(depth_map.shape)
@@ -155,13 +163,15 @@ class DV3SpatialTower(nn.Module):
         elif patch_tokens_metric.dim() != 3:
             raise RuntimeError(f"Unexpected token shape from dv3: {patch_tokens_metric.shape}")
 
-        patch_tokens  = tokens[:, ps_idx:, :] # (B, Np, D)  where to get ps_idx??
+        ps_idx = 0
+        patch_tokens  = patch_tokens[:, ps_idx:, :] # (B, Np, D)  where to get ps_idx?? 0 for now
+        patch_tokens_metric  = patch_tokens_metric[:, ps_idx:, :] # (B, Np, D)  where to get ps_idx?? 0 for now
         
         all_camera_tokens = torch.cat([camera_tokens,camera_tokens_metric],dim=-1)
-        all_patch_token = torch.cat([patch_tokens,patch_tokens_metric],dim=-1)
-        print("camera_shape",all_camera_tokens.shape)
-        print("patch_shape",all_patch_token.shape)
-        return all_camera_tokens, all_patch_token
+        all_patch_tokens = torch.cat([patch_tokens,patch_tokens_metric],dim=-1)
+        #print("camera_shape",all_camera_tokens.shape)
+        #print("patch_shape",all_patch_tokens.shape)
+        return all_camera_tokens, all_patch_tokens
 
     @property
     def dtype(self):

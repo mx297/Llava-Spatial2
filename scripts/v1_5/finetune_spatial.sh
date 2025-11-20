@@ -5,25 +5,25 @@ FUSION_BLOCK="cross_attention"
 SPATIAL_TOWER_SELECT_FEATURE="all"
 SPATIAL_FEATURE_DIM="2048"
 TUNE_MM_MLP_ADAPTER=True
-#VISION_MODEL_VERSION="google/siglip-so400m-patch14-384"
-VISION_MODEL_VERSION="openai/clip-vit-large-patch14-336"
-#MODEL="lmms-lab/llava-onevision-qwen2-7b-si"
+VISION_MODEL_VERSION="google/siglip-so400m-patch14-384"
+#VISION_MODEL_VERSION="openai/clip-vit-large-patch14-336"
+MODEL="lmms-lab/llava-onevision-qwen2-7b-si"
 #MODEL="lmms-lab/llava-next-interleave-qwen-7b"
-MODEL="liuhaotian/llava-v1.5-7b"
+#MODEL="liuhaotian/llava-v1.5-7b"
 
 #--pretrain_mm_mlp_adapter ./checkpoints/mm_projector.bin \
 deepspeed llava/train/train_mem_spatial.py \
     --deepspeed ./scripts/zero2.json \
     --model_name_or_path ${MODEL} \
-    --version v1 \
+    --version qwen_1_5 \
     --data_path ./data/formatted_questions_image.json \
     --image_folder /l/users/$USER \
     --eval_data_path ./data/sampled_val.json \
     --val_image_folder /l/users/$USER \
     --vision_tower ${VISION_MODEL_VERSION} \
     --lora_enable True \
-    --lora_r 64 \
-    --lora_alpha 128 \
+    --lora_r 128 \
+    --lora_alpha 256 \
     --mm_projector_type mlp2x_gelu \
     --mm_vision_select_layer -2 \
     --mm_use_im_start_end False \
@@ -38,14 +38,14 @@ deepspeed llava/train/train_mem_spatial.py \
     --image_aspect_ratio pad \
     --group_by_modality_length False \
     --bf16 True \
-    --output_dir /l/users/$USER/checkpoints/llava-spatial-wu0.1-lr1e-5-bs32-2epochs-max4096-lora64-128-vicuna7b \
+    --output_dir /l/users/$USER/checkpoints/llava-next-spatial-wu0.1-lr1e-5-bs32-2epochs-max2048-lora128-256-qwen7b \
     --num_train_epochs 2    \
     --per_device_train_batch_size 32 \
     --per_device_eval_batch_size 16 \
     --gradient_accumulation_steps 1 \
     --evaluation_strategy "steps" \
     --eval_steps 50 \
-    --load_best_model_at_end True \
+    --load_best_model_at_end False \
     --greater_is_better False \
     --metric_for_best_model eval_loss \
     --save_strategy "steps" \
@@ -57,9 +57,9 @@ deepspeed llava/train/train_mem_spatial.py \
     --lr_scheduler_type "cosine" \
     --logging_steps 1 \
     --tf32 True \
-    --model_max_length 4096 \
+    --model_max_length 2048 \
     --gradient_checkpointing True \
     --dataloader_num_workers 4 \
     --lazy_preprocess True \
     --report_to wandb \
-    --run_name llava-spatial-wu0.1-lr1e-5-bs32-2epochs-max4096-lora64-128-vicuna7b
+    --run_name llava-next-spatial-wu0.1-lr1e-5-bs32-2epochs-max2048-lora128-256-qwen7b
